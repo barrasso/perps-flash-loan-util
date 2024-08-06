@@ -1,0 +1,9 @@
+[profile.default]
+src = 'src'
+out = 'out'
+libs = ['lib']
+tests = 'test'
+cache_path = 'cache'
+
+[profile.rust]
+version = 'nightly'
