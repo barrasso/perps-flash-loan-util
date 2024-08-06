@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.7;
 
-import "@aave-core-v3/contracts/flashloan/base/FlashLoanSimpleReceiverBase.sol";
-import "@aave-core-v3/contracts/interfaces/IPoolAddressesProvider.sol";
+import "@aave-v3-core/contracts/flashloan/base/FlashLoanSimpleReceiverBase.sol";
+import "@aave-v3-core/contracts/interfaces/IPoolAddressesProvider.sol";
 import "@uniswap-v3-periphery/contracts/interfaces/ISwapRouter.sol";
 import "@uniswap-v3-periphery/contracts/interfaces/IQuoter.sol";
 import "@openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
