@@ -1,6 +1,17 @@
-# PerpsV3FlashLoanUtil
+# Perps Flash Loan Util
 
-PerpsV3FlashLoanUtil provides users with the ability to flash loan and close out a Synthetix V3 perpetual position.
+This tool provides users with the ability to request a flash loan to unwind a Synthetix V3 Perps multi-collateral position in a single transaction.
+
+What this contract does:
+
+- Flash loans USDC
+- Wraps to snxUSD
+- Repays debt by burning snxUSD
+- Withdraws margin (e.g. snxETH)
+- Unwraps to WETH
+- Swaps to USDC
+- Repays Flash loan + fee
+- Sends user remaining margin
 
 ## Prerequisites
 
@@ -22,6 +33,8 @@ PerpsV3FlashLoanUtil provides users with the ability to flash loan and close out
    npm install
    ```
 
+   Dependencies: aave, uniswap, openzeppelin, synthetix.
+
 3. Compile the contracts:
 
    ```bash
@@ -40,11 +53,13 @@ forge test
 
 Configure your environment variables in a `.env` file (e.g., private key, network endpoint).
 
-Deploy the contracts:
+See `PerpsFlashLoanUtil.s.sol` for instructions on how to deploy the contract.
 
-```bash
-forge script scripts/deploy.js --rpc-url <YOUR_RPC_URL> --private-key <YOUR_PRIVATE_KEY> --broadcast
-```
+## Considerations
+
+- MEV attack vectors / frontrunning
+
+- Granting / revoking account permissions
 
 ## License
 
