@@ -6,21 +6,31 @@ import "@aave-v3-core/contracts/interfaces/IPoolAddressesProvider.sol";
 import "@uniswap-v3-periphery/contracts/interfaces/ISwapRouter.sol";
 import "@uniswap-v3-periphery/contracts/interfaces/IQuoter.sol";
 import "@openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
-import "@openzeppelin-contracts/contracts/access/Ownable.sol";
 import {ISynthetixCore} from "./interfaces/ISynthetixCore.sol";
 import {ISpotMarketProxy} from "./interfaces/ISpotMarketProxy.sol";
 import {IPerpsMarketProxy} from "./interfaces/IPerpsMarketProxy.sol";
 
-contract PerpsV3FlashLoanUtil is FlashLoanSimpleReceiverBase, Ownable {
+/// @title PerpsFlashLoanUtil
+/// @notice A tool used for flashing out of Synthetix V3 Perps positions.
+/// @author meb (@barrasso)
+contract PerpsFlashLoanUtil is FlashLoanSimpleReceiverBase {
     ISynthetixCore public synthetixCore;
     ISpotMarketProxy public spotMarketProxy;
     IPerpsMarketProxy public perpsMarketProxy;
     IQuoter public quoter;
     ISwapRouter public router;
-    address public assetToFlash;
-    address public snxUSD;
-    uint256 public feePercentage; // Fee percentage (e.g., 100 = 1%)
+    address public usdcToken;
+    address public snxUSDToken;
 
+    /// @notice Constructs the PerpsFlashLoanUtil contract
+    /// @param _addressProvider Address of the Aave Pool Addresses Provider
+    /// @param _synthetixCore Address of the Synthetix Core contract
+    /// @param _spotMarketProxy Address of the Spot Market Proxy contract
+    /// @param _perpsMarketProxy Address of the Perps Market Proxy contract
+    /// @param _quoter Address of the Uniswap V3 Quoter contract
+    /// @param _router Address of the Uniswap V3 Router contract
+    /// @param _usdcToken Address of the asset to be used for flash loans (e.g. USDC)
+    /// @param _snxUSDToken Address of the snxUSD token
     constructor(
         address _addressProvider,
         address _synthetixCore,
@@ -28,20 +38,23 @@ contract PerpsV3FlashLoanUtil is FlashLoanSimpleReceiverBase, Ownable {
         address _perpsMarketProxy,
         address _quoter,
         address _router,
-        address _assetToFlash,
-        address _snxUSD,
-        uint256 _feePercentage
+        address _usdcToken,
+        address _snxUSDToken
     ) FlashLoanSimpleReceiverBase(IPoolAddressesProvider(_addressProvider)) {
         synthetixCore = ISynthetixCore(_synthetixCore);
         spotMarketProxy = ISpotMarketProxy(_spotMarketProxy);
         perpsMarketProxy = IPerpsMarketProxy(_perpsMarketProxy);
         quoter = IQuoter(_quoter);
         router = ISwapRouter(_router);
-        assetToFlash = _assetToFlash;
-        snxUSD = _snxUSD;
-        feePercentage = _feePercentage;
+        usdcToken = _usdcToken;
+        snxUSDToken = _snxUSDToken;
     }
 
+    /// @notice Requests a flash loan to unwind a perps position with its collateral
+    /// @param _amount Amount of the asset to flash loan
+    /// @param _collateralType Type of the collateral
+    /// @param _marketId ID of the market
+    /// @param _accountId ID of the account
     function requestFlashLoan(
         uint256 _amount,
         address _collateralType,
@@ -49,7 +62,7 @@ contract PerpsV3FlashLoanUtil is FlashLoanSimpleReceiverBase, Ownable {
         uint128 _accountId
     ) external {
         address receiverAddress = address(this);
-        address asset = assetToFlash;
+        address asset = usdcToken;
         uint256 amount = _amount;
         bytes memory params = abi.encode(
             msg.sender,
@@ -68,6 +81,13 @@ contract PerpsV3FlashLoanUtil is FlashLoanSimpleReceiverBase, Ownable {
         );
     }
 
+    /// @notice Executes the unwinding after receiving the flash loan
+    /// @param asset The address of the asset to be flashed
+    /// @param amount The amount to be flashed
+    /// @param premium The fee charged by Aave for the flash loan
+    /// @param initiator The initiator of the flash loan
+    /// @param params Additional parameters passed during the flash loan
+    /// @return True if the operation succeeds, false otherwise
     function executeOperation(
         address asset,
         uint256 amount,
@@ -75,6 +95,9 @@ contract PerpsV3FlashLoanUtil is FlashLoanSimpleReceiverBase, Ownable {
         address initiator,
         bytes calldata params
     ) external override returns (bool) {
+        require(initiator == address(this), "Invalid initiator");
+
+        // Decode the params from the flash request
         (
             address sender,
             address collateralType,
@@ -82,18 +105,22 @@ contract PerpsV3FlashLoanUtil is FlashLoanSimpleReceiverBase, Ownable {
             uint128 accountId
         ) = abi.decode(params, (address, address, uint128, uint128));
 
-        IERC20(assetToFlash).approve(address(spotMarketProxy), amount);
+        // Wrap to snxUSD
+        IERC20(asset).approve(address(spotMarketProxy), amount);
         spotMarketProxy.wrap(marketId, amount, 0);
 
+        // Repay debt
         synthetixCore.burnUsd(
             accountId,
             synthetixCore.getPreferredPool(),
-            snxUSD,
+            snxUSDToken,
             amount
         );
 
+        // Reduce the perps position collateral by the appropriate amount.
         perpsMarketProxy.modifyCollateral(accountId, marketId, -int256(amount));
 
+        // Unwrap the collateral back to its underlying token.
         IERC20(collateralType).approve(address(spotMarketProxy), amount);
         (uint256 unwrappedAmount, ) = spotMarketProxy.unwrap(
             marketId,
@@ -101,11 +128,12 @@ contract PerpsV3FlashLoanUtil is FlashLoanSimpleReceiverBase, Ownable {
             0
         );
 
-        if (collateralType != assetToFlash) {
+        // Swap the collateral to USDC if necessary
+        if (collateralType != usdcToken) {
             IERC20(collateralType).approve(address(router), unwrappedAmount);
 
             uint256 amountOutMinimum = quoter.quoteExactInput(
-                abi.encodePacked(collateralType, unwrappedAmount, assetToFlash),
+                abi.encodePacked(collateralType, unwrappedAmount, asset),
                 unwrappedAmount
             );
 
@@ -114,7 +142,7 @@ contract PerpsV3FlashLoanUtil is FlashLoanSimpleReceiverBase, Ownable {
                     path: abi.encodePacked(
                         collateralType,
                         unwrappedAmount,
-                        assetToFlash
+                        asset
                     ),
                     recipient: address(this),
                     deadline: block.timestamp,
@@ -124,31 +152,18 @@ contract PerpsV3FlashLoanUtil is FlashLoanSimpleReceiverBase, Ownable {
             unwrappedAmount = router.exactInput(swapParams);
         }
 
+        // Calculate amount to pay back
         uint256 totalDebt = amount + premium;
-        uint256 fee = (totalDebt * feePercentage) / 10000;
-        require(unwrappedAmount >= totalDebt + fee, "Not enough to repay loan");
+        require(unwrappedAmount >= totalDebt, "Not enough to repay loan");
 
-        IERC20(assetToFlash).transfer(owner(), fee);
-        IERC20(assetToFlash).approve(address(POOL), totalDebt);
-        IERC20(assetToFlash).transfer(
-            sender,
-            unwrappedAmount - totalDebt - fee
-        );
+        // Transfer the remaining tokens back to the original sender and pay off the flash loan.
+        uint256 remaining = unwrappedAmount - totalDebt;
+        IERC20(asset).transfer(sender, remaining);
+        IERC20(asset).approve(address(POOL), totalDebt);
 
         return true;
     }
 
-    function setFeePercentage(uint256 _feePercentage) external onlyOwner {
-        feePercentage = _feePercentage;
-    }
-
-    function withdrawTokens(address token) external onlyOwner {
-        IERC20(token).transfer(owner(), IERC20(token).balanceOf(address(this)));
-    }
-
-    function withdrawETH() external onlyOwner {
-        payable(owner()).transfer(address(this).balance);
-    }
-
+    /// @notice Fallback function
     receive() external payable {}
 }
