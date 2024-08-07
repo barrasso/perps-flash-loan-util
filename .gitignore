@@ -1,5 +1,25 @@
-node_modules/
-.cache
+# Compiler files
+cache/
 out/
-lib/
+node_modules
+
+# Ignores development broadcast logs
+!/broadcast
+/broadcast/*
+/broadcast/*/31337/
+
+# Dotenv file
 .env
+
+# Other
+.vscode
+.idea
+.DS_Store
+
+# latex
+*.aux
+*.log
+*.gz
+*.out
+*/_whitepaper.pdf
+*.synctex(busy)
